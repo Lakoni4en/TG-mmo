@@ -531,31 +531,158 @@ def gacha_pull_10x():
 
 # ============ БОЕВАЯ СИСТЕМА ============
 
-def simulate_combat(attacker: dict, defender: dict) -> dict:
-    atk_hp, def_hp = attacker["hp"], defender["hp"]
+def simulate_combat(attacker: dict, defender: dict, user_skills: dict = None) -> dict:
+    """
+    Симуляция боя с поддержкой скиллов
+    user_skills: {skill_id: {"level": int, "order": int}}
+    """
+    atk_hp = attacker.get("hp", attacker.get("max_hp", 100))
+    atk_max_hp = attacker.get("max_hp", atk_hp)
+    def_hp = defender["hp"]
     log, total_dealt, total_received, crits, rounds = [], 0, 0, 0, 0
+    
+    # Инициализация скиллов
+    active_skills = {}  # {skill_id: {"cooldown": int, "effect": dict, "duration": int}}
+    skill_cooldowns = {}  # {skill_id: int}
+    skill_durations = {}  # {skill_id: int}
+    dot_effects = {}  # {skill_id: {"damage": int, "turns_left": int}}
+    
+    if user_skills:
+        # Сортируем скиллы по порядку
+        sorted_skills = sorted(user_skills.items(), key=lambda x: x[1]["order"])
+        for skill_id, skill_data in sorted_skills:
+            skill_stats = get_skill_stats(skill_id, skill_data["level"])
+            skill_cooldowns[skill_id] = 0  # Начинаем с готовности
+    
+    # Активные эффекты от скиллов
+    active_effects = {
+        "damage_multiplier": 1.0,
+        "defense_multiplier": 1.0,
+        "attack_multiplier": 1.0,
+        "guaranteed_crit": False,
+    }
 
     while atk_hp > 0 and def_hp > 0 and rounds < 25:
         rounds += 1
-        is_crit = random.random() * 100 < attacker.get("crit", 5)
-        dmg = max(1, int(attacker["attack"] * random.uniform(0.8, 1.2) - defender["defense"] * 0.3))
+        
+        # Применяем DoT эффекты
+        for skill_id, dot in list(dot_effects.items()):
+            dot_dmg = int(def_hp * dot["damage"])
+            def_hp -= dot_dmg
+            total_dealt += dot_dmg
+            dot["turns_left"] -= 1
+            if dot["turns_left"] <= 0:
+                del dot_effects[skill_id]
+            log.append(f"☠️ {SKILLS[skill_id]['name']}: -{dot_dmg} HP врагу")
+        
+        # Проверяем использование скиллов (автоматически по порядку)
+        skill_used = False
+        if user_skills:
+            sorted_skills = sorted(user_skills.items(), key=lambda x: x[1]["order"])
+            for skill_id, skill_data in sorted_skills:
+                if skill_cooldowns.get(skill_id, 999) <= 0:
+                    skill = SKILLS.get(skill_id, {})
+                    skill_stats = get_skill_stats(skill_id, skill_data["level"])
+                    effect = skill_stats["effect"]
+                    
+                    if skill["type"] == "damage_boost":
+                        active_effects["damage_multiplier"] = effect["damage_multiplier"]
+                        skill_durations[skill_id] = effect.get("duration", 1)
+                        skill_cooldowns[skill_id] = skill_stats["cooldown"]
+                        log.append(f"⚡ {skill['name']} активирован!")
+                        skill_used = True
+                        break
+                    elif skill["type"] == "defense_boost":
+                        active_effects["defense_multiplier"] = effect["defense_multiplier"]
+                        skill_durations[skill_id] = effect.get("duration", 1)
+                        skill_cooldowns[skill_id] = skill_stats["cooldown"]
+                        log.append(f"🛡 {skill['name']} активирован!")
+                        skill_used = True
+                        break
+                    elif skill["type"] == "heal":
+                        heal_amount = int(atk_max_hp * effect["heal_percent"])
+                        atk_hp = min(atk_max_hp, atk_hp + heal_amount)
+                        skill_cooldowns[skill_id] = skill_stats["cooldown"]
+                        log.append(f"💚 {skill['name']}: +{heal_amount} HP")
+                        skill_used = True
+                        break
+                    elif skill["type"] == "guaranteed_crit":
+                        active_effects["guaranteed_crit"] = True
+                        skill_durations[skill_id] = 1
+                        skill_cooldowns[skill_id] = skill_stats["cooldown"]
+                        log.append(f"⚡ {skill['name']} активирован!")
+                        skill_used = True
+                        break
+                    elif skill["type"] == "berserker":
+                        active_effects["attack_multiplier"] = effect["attack_multiplier"]
+                        active_effects["defense_multiplier"] = effect["defense_multiplier"]
+                        skill_durations[skill_id] = effect.get("duration", 2)
+                        skill_cooldowns[skill_id] = skill_stats["cooldown"]
+                        log.append(f"🔥 {skill['name']} активирован!")
+                        skill_used = True
+                        break
+                    elif skill["type"] == "dot":
+                        dot_effects[skill_id] = {
+                            "damage": effect["dot_percent"],
+                            "turns_left": effect.get("duration", 3)
+                        }
+                        skill_cooldowns[skill_id] = skill_stats["cooldown"]
+                        log.append(f"☠️ {skill['name']} применён!")
+                        skill_used = True
+                        break
+        
+        # Атака игрока
+        base_dmg = attacker["attack"] * random.uniform(0.8, 1.2)
+        base_dmg *= active_effects["damage_multiplier"] * active_effects["attack_multiplier"]
+        is_crit = active_effects["guaranteed_crit"] or (random.random() * 100 < attacker.get("crit", 5))
         if is_crit:
-            dmg *= 2
+            base_dmg *= 2
             crits += 1
+        dmg = max(1, int(base_dmg - defender["defense"] * 0.3))
         def_hp -= dmg
         total_dealt += dmg
-        log.append(f"⚔️ Ты: -{dmg} HP{'💥' if is_crit else ''}")
+        crit_emoji = "💥" if is_crit else ""
+        skill_emoji = "⚡" if skill_used else ""
+        log.append(f"⚔️ Ты: -{dmg} HP{crit_emoji}{skill_emoji}")
+        
+        # Сбрасываем guaranteed_crit после использования
+        if active_effects["guaranteed_crit"]:
+            active_effects["guaranteed_crit"] = False
+        
         if def_hp <= 0:
             break
-        dmg_b = max(1, int(defender["attack"] * random.uniform(0.8, 1.2) - attacker["defense"] * 0.3))
+        
+        # Атака врага
+        base_defense = attacker["defense"] * active_effects["defense_multiplier"]
+        dmg_b = max(1, int(defender["attack"] * random.uniform(0.8, 1.2) - base_defense * 0.3))
         atk_hp -= dmg_b
         total_received += dmg_b
         log.append(f"👹 Враг: -{dmg_b} HP")
+        
+        # Обновляем кулдауны и длительность эффектов
+        for skill_id in skill_cooldowns:
+            if skill_cooldowns[skill_id] > 0:
+                skill_cooldowns[skill_id] -= 1
+        
+        for skill_id in list(skill_durations.keys()):
+            skill_durations[skill_id] -= 1
+            if skill_durations[skill_id] <= 0:
+                del skill_durations[skill_id]
+                # Сбрасываем эффекты
+                if skill_id in user_skills:
+                    skill = SKILLS.get(skill_id, {})
+                    if skill.get("type") == "damage_boost":
+                        active_effects["damage_multiplier"] = 1.0
+                    elif skill.get("type") == "defense_boost":
+                        active_effects["defense_multiplier"] = 1.0
+                    elif skill.get("type") == "berserker":
+                        active_effects["attack_multiplier"] = 1.0
+                        active_effects["defense_multiplier"] = 1.0
 
     return {
-        "won": def_hp <= 0, "rounds": rounds, "log": log[:8],
+        "won": def_hp <= 0, "rounds": rounds, "log": log[:10],
         "damage_dealt": total_dealt, "damage_received": total_received,
-        "crits": crits, "hp_left": max(0, atk_hp), "hp_max": attacker["hp"],
+        "crits": crits, "hp_left": max(0, atk_hp), "hp_max": atk_max_hp,
     }
 
 
@@ -835,6 +962,94 @@ NEW_ZONES = [
 
 # Добавляем новые локации к существующим
 ZONES.extend(NEW_ZONES)
+
+# ============ СКИЛЛЫ ============
+SKILLS = {
+    "power_strike": {
+        "name": "💥 Мощный удар",
+        "desc": "Увеличивает урон на 50% на 1 ход",
+        "type": "damage_boost",
+        "cooldown": 3,  # Ходов до следующего использования
+        "effect": {"damage_multiplier": 1.5, "duration": 1},
+        "max_level": 10,
+        "cost_per_level": 100,  # Золота за уровень
+    },
+    "shield": {
+        "name": "🛡 Щит",
+        "desc": "Уменьшает получаемый урон на 30% на 1 ход",
+        "type": "defense_boost",
+        "cooldown": 4,
+        "effect": {"defense_multiplier": 0.7, "duration": 1},
+        "max_level": 10,
+        "cost_per_level": 100,
+    },
+    "heal": {
+        "name": "💚 Лечение",
+        "desc": "Восстанавливает 20% от максимального HP",
+        "type": "heal",
+        "cooldown": 5,
+        "effect": {"heal_percent": 0.2},
+        "max_level": 10,
+        "cost_per_level": 120,
+    },
+    "critical_strike": {
+        "name": "⚡ Критический удар",
+        "desc": "Гарантированный критический удар (x2 урона)",
+        "type": "guaranteed_crit",
+        "cooldown": 4,
+        "effect": {"guaranteed_crit": True},
+        "max_level": 10,
+        "cost_per_level": 150,
+    },
+    "berserker_rage": {
+        "name": "🔥 Ярость берсерка",
+        "desc": "+30% к атаке и -20% к защите на 2 хода",
+        "type": "berserker",
+        "cooldown": 6,
+        "effect": {"attack_multiplier": 1.3, "defense_multiplier": 0.8, "duration": 2},
+        "max_level": 10,
+        "cost_per_level": 130,
+    },
+    "poison": {
+        "name": "☠ Яд",
+        "desc": "Наносит 10% от урона врагу каждый ход (3 хода)",
+        "type": "dot",
+        "cooldown": 5,
+        "effect": {"dot_percent": 0.1, "duration": 3},
+        "max_level": 10,
+        "cost_per_level": 110,
+    },
+}
+
+def get_skill_stats(skill_id: str, level: int) -> dict:
+    """Возвращает статистику скилла на определённом уровне"""
+    skill = SKILLS.get(skill_id, {})
+    if not skill:
+        return {}
+    
+    base_effect = skill.get("effect", {}).copy()
+    
+    # Улучшение эффектов с уровнем
+    if skill["type"] == "damage_boost":
+        base_effect["damage_multiplier"] = 1.5 + (level - 1) * 0.05
+    elif skill["type"] == "defense_boost":
+        base_effect["defense_multiplier"] = max(0.3, 0.7 - (level - 1) * 0.03)
+    elif skill["type"] == "heal":
+        base_effect["heal_percent"] = 0.2 + (level - 1) * 0.02
+    elif skill["type"] == "berserker":
+        base_effect["attack_multiplier"] = 1.3 + (level - 1) * 0.03
+    elif skill["type"] == "dot":
+        base_effect["dot_percent"] = 0.1 + (level - 1) * 0.01
+        base_effect["duration"] = 3 + (level - 1) // 3
+    
+    # Уменьшение кулдауна с уровнем
+    cooldown = max(1, skill.get("cooldown", 3) - (level - 1) // 2)
+    
+    return {
+        "effect": base_effect,
+        "cooldown": cooldown,
+        "current_cooldown": 0,
+    }
 
 # ============ ЗЕЛЬЯ ============
 POTIONS = {

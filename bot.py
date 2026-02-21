@@ -21,7 +21,7 @@ from game_data import (
     get_tower_monster, tower_rewards, generate_item, spin_wheel,
     generate_daily_quests, generate_expedition_rewards,
     GACHA_FREE_COST, GACHA_PREM_COST, GACHA_10X_COST,
-    POTIONS, PREMIUM_BONUSES,
+    POTIONS, PREMIUM_BONUSES, SKILLS, get_skill_stats,
 )
 from image_generator import (
     generate_item_image, generate_character_image, get_item_image_prompt,
@@ -40,7 +40,7 @@ def kb_main():
         [IKB(text="🌍 Экспедиция", callback_data="exped"), IKB(text="📜 Квесты", callback_data="quests")],
         [IKB(text="🎰 Призыв", callback_data="gacha"), IKB(text="🎡 Колесо", callback_data="wheel")],
         [IKB(text="📦 Инвентарь", callback_data="inv"), IKB(text="🧪 Зелья", callback_data="potions")],
-        [IKB(text="⚒️ Профессия", callback_data="profession")],
+        [IKB(text="⚒️ Профессия", callback_data="profession"), IKB(text="⚡ Скиллы", callback_data="skills")],
         [IKB(text="🔧 Прокачка", callback_data="upgrade_item"), IKB(text="⛏️ Крафт", callback_data="upgrade")],
         [IKB(text="👤 Профиль", callback_data="prof"), IKB(text="🏆 Топ", callback_data="top")],
         [IKB(text="🏪 Обычный магазин", callback_data="shop"), IKB(text="👑 Премиум магазин", callback_data="premium_shop")],
@@ -56,27 +56,50 @@ def kb_start():
 async def get_combat_stats(user_id):
     player = await db.get_player(user_id)
     if not player: return {}
-    return get_total_stats(
-        get_class_stats(player["class"], player["level"], player.get("race")),
-        await db.get_equipment_bonuses(user_id)
-    )
+    base_stats = get_class_stats(player["class"], player["level"], player.get("race"))
+    equip_bonuses = await db.get_equipment_bonuses(user_id)
+    total = get_total_stats(base_stats, equip_bonuses)
+    
+    # Получаем текущее HP из базы данных
+    current_hp, max_hp = await db.get_current_hp(user_id)
+    
+    # Если HP не установлены или max_hp изменился (уровень или экипировка), обновляем
+    new_max_hp = total["hp"]
+    if max_hp == 0:
+        # Первая инициализация
+        await db.set_player_hp(user_id, new_max_hp, new_max_hp)
+        current_hp = new_max_hp
+    elif max_hp != new_max_hp:
+        # max_hp изменился (уровень или экипировка) - пропорционально увеличиваем current_hp
+        if max_hp > 0:
+            hp_ratio = current_hp / max_hp
+            new_current_hp = int(new_max_hp * hp_ratio)
+        else:
+            new_current_hp = new_max_hp
+        await db.set_player_hp(user_id, new_current_hp, new_max_hp)
+        current_hp = new_current_hp
+    
+    # Используем текущее HP из базы данных
+    total["hp"] = current_hp
+    total["max_hp"] = new_max_hp
+    
+    return total
 
 async def track_quest(user_id, qtype, amount=1):
     await db.update_quest_progress(user_id, qtype, amount)
 
 async def add_item_with_image(user_id: int, item: dict) -> int:
     """Добавляет предмет с генерацией изображения"""
-    if config.GENERATE_IMAGES and not item.get("image_url"):
-        try:
-            img_url = await generate_item_image(item["name"], item["item_type"], item["rarity"])
-            if img_url:
-                item["image_url"] = img_url
-        except Exception as e:
-            logger.error(f"Ошибка генерации изображения предмета: {e}")
     try:
         item_id = await db.add_item(user_id, item)
-        if item.get("image_url") and item_id:
-            await db.update_item_image(item_id, item["image_url"])
+        # Генерируем изображение асинхронно после добавления предмета
+        if config.GENERATE_IMAGES and item_id and not item.get("image_url"):
+            try:
+                img_url = await generate_item_image(item["name"], item["item_type"], item["rarity"])
+                if img_url:
+                    await db.update_item_image(item_id, img_url)
+            except Exception as e:
+                logger.error(f"Ошибка генерации изображения предмета: {e}")
         return item_id if item_id else 0
     except Exception as e:
         logger.error(f"Ошибка добавления предмета: {e}")
@@ -217,10 +240,15 @@ async def cb_cls(cb: types.CallbackQuery):
     player = await db.get_player(cb.from_user.id)
     if not player or not player.get("race"): await cb.answer("Сначала выбери расу!",show_alert=True); return
     if player.get("class") and player.get("class") in CLASSES: await cb.answer("Уже есть персонаж!",show_alert=True); return
-    await cb.answer()
+    try: await cb.answer()
+    except: pass
+    
     # Обновляем класс игрока
     await db.update_player_class(cb.from_user.id, cid)
     s = get_class_stats(cid, 1, player.get("race")); c = CLASSES[cid]; r = RACES[player.get("race")]
+    
+    # Инициализируем HP при создании персонажа
+    await db.set_player_hp(cb.from_user.id, s["max_hp"], s["max_hp"])
     
     # Генерируем изображение персонажа
     img_url = None
@@ -304,12 +332,27 @@ async def cb_hz(cb: types.CallbackQuery):
     p = await db.get_player(uid)
     if not p: return
     zone = next((z for z in ZONES if z["id"]==zid), None)
-    if not zone or p["level"]<zone["min_level"]: await cb.answer(f"Нужен Lv.{zone['min_level']}!",show_alert=True); return
-    await cb.answer()
+    if not zone or p["level"]<zone["min_level"]: 
+        try: await cb.answer(f"Нужен Lv.{zone['min_level']}!",show_alert=True)
+        except: pass
+        return
+    try:
+        await cb.answer()
+    except:
+        pass  # Игнорируем ошибку "query is too old"
+    
     monster, is_boss = pick_monster(zid)
     ps = await get_combat_stats(uid)
     ms = {"hp": monster["hp"], "attack": monster["attack"], "defense": monster["defense"], "crit": 5.0 if is_boss else 3.0}
-    r = simulate_combat(ps, ms)
+    # Получаем скиллы игрока
+    user_skills = await db.get_skills(uid)
+    r = simulate_combat(ps, ms, user_skills if user_skills else None)
+    
+    # Сохраняем HP после боя
+    new_hp = r["hp_left"]
+    max_hp = r["hp_max"]
+    await db.set_player_hp(uid, new_hp, max_hp)
+    
     boss_tag = " 👑БОСС!" if is_boss else ""
     if r["won"]:
         gold, xp = monster["gold"], monster["xp"]
@@ -372,10 +415,20 @@ async def cb_hz(cb: types.CallbackQuery):
         log = "\n".join(r["log"][:5])
         prem_text = " 👑" if is_prem else ""
         t = f"⚔️ <b>{monster['emoji']} {monster['name']}</b>{boss_tag}{prem_text}\n\n{log}\n\n✅ <b>ПОБЕДА!</b> ({r['rounds']}р)\n❤️ {r['hp_left']}/{r['hp_max']} [{hp_bar(r['hp_left'],r['hp_max'])}]\n\n{cl}💰+{gold} ✨+{xp}XP{dt}{lt}"
+        # Кнопка "Продолжить" на той же локации
+        kb = IKM(inline_keyboard=[
+            [IKB(text="⚔️ Продолжить", callback_data=f"hz_{zid}")],
+            [IKB(text="🗺 Другая локация", callback_data="hunt")],
+            [IKB(text="🏠 Меню", callback_data="menu")]
+        ])
     else:
         log = "\n".join(r["log"][:5])
-        t = f"⚔️ <b>{monster['emoji']} {monster['name']}</b>{boss_tag}\n\n{log}\n\n❌ <b>ПОРАЖЕНИЕ!</b>\n💡 Улучши экипировку!"
-    kb = IKM(inline_keyboard=[[IKB(text="🗺 Ещё", callback_data="hunt")],[IKB(text="🏠 Меню", callback_data="menu")]])
+        t = f"⚔️ <b>{monster['emoji']} {monster['name']}</b>{boss_tag}\n\n{log}\n\n❌ <b>ПОРАЖЕНИЕ!</b>\n❤️ {r['hp_left']}/{r['hp_max']} [{hp_bar(r['hp_left'],r['hp_max'])}]\n💡 Улучши экипировку или восстанови HP!"
+        kb = IKM(inline_keyboard=[
+            [IKB(text="🧪 Зелья", callback_data="potions")],
+            [IKB(text="🗺 Охота", callback_data="hunt")],
+            [IKB(text="🏠 Меню", callback_data="menu")]
+        ])
     try: await cb.message.edit_text(t, reply_markup=kb)
     except: await cb.message.answer(t, reply_markup=kb)
 
@@ -406,7 +459,8 @@ async def cb_afight(cb: types.CallbackQuery):
     ob = get_class_stats(opp["class"], opp["level"])
     oe = await db.get_equipment_bonuses(opp["user_id"])
     os_ = get_total_stats(ob, oe)
-    r = simulate_combat(ms, os_)
+    user_skills = await db.get_skills(uid)
+    r = simulate_combat(ms, os_, user_skills if user_skills else None)
     oc = CLASSES[opp["class"]]; on = opp["first_name"] or opp["username"] or "???"
     log = "\n".join(r["log"][:5])
     if r["won"]:
@@ -447,7 +501,8 @@ async def cb_tw_go(cb: types.CallbackQuery):
     p = await db.get_player(uid); nf = p["tower_floor"] + 1
     m = get_tower_monster(nf); ps = await get_combat_stats(uid)
     ms = {"hp": m["hp"], "attack": m["attack"], "defense": m["defense"], "crit": m.get("crit",3)}
-    r = simulate_combat(ps, ms)
+    user_skills = await db.get_skills(uid)
+    r = simulate_combat(ps, ms, user_skills if user_skills else None)
     await db.use_tower_attempt(uid)
     log = "\n".join(r["log"][:5])
     if r["won"]:
@@ -965,22 +1020,163 @@ async def cb_potions(cb: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("use_pot_"))
 async def cb_use_potion(cb: types.CallbackQuery):
     pid = cb.data[8:]
-    if pid not in POTIONS: await cb.answer("Ошибка!", show_alert=True); return
+    if pid not in POTIONS: 
+        try: await cb.answer("Ошибка!", show_alert=True)
+        except: pass
+        return
     pot = POTIONS[pid]
     
     if not await db.use_potion(cb.from_user.id, pid):
-        await cb.answer("У тебя нет этого зелья!", show_alert=True)
+        try: await cb.answer("У тебя нет этого зелья!", show_alert=True)
+        except: pass
         return
     
-    await cb.answer()
+    try: await cb.answer()
+    except: pass
     
     if pot["type"] == "hp":
-        # Восстанавливаем HP (в бою это не работает, но можно добавить)
-        await cb.answer(f"✅ {pot['name']} использовано! Восстановлено {pot['restore']} HP", show_alert=True)
+        # Восстанавливаем HP
+        new_hp = await db.restore_hp(cb.from_user.id, pot["restore"])
+        current_hp, max_hp = await db.get_current_hp(cb.from_user.id)
+        try: await cb.answer(f"✅ {pot['name']} использовано! Восстановлено {pot['restore']} HP\n❤️ {current_hp}/{max_hp}", show_alert=True)
+        except: pass
     elif pot["type"] == "mp":
-        await cb.answer(f"✅ {pot['name']} использовано! Восстановлено {pot['restore']} MP", show_alert=True)
+        try: await cb.answer(f"✅ {pot['name']} использовано! Восстановлено {pot['restore']} MP", show_alert=True)
+        except: pass
     
     await cb_potions(cb)
+
+# ======== СКИЛЛЫ ========
+@dp.callback_query(F.data == "skills")
+async def cb_skills(cb: types.CallbackQuery):
+    try: await cb.answer()
+    except: pass
+    p = await db.get_player(cb.from_user.id)
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
+        try: await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        except: pass
+        return
+    
+    user_skills = await db.get_skills(cb.from_user.id)
+    text = "⚡ <b>Скиллы</b>\n\n<i>Персонаж использует скиллы автоматически в бою в порядке приоритета.</i>\n\n"
+    
+    # Показываем изученные скиллы
+    if user_skills:
+        text += "<b>Изученные скиллы:</b>\n"
+        sorted_skills = sorted(user_skills.items(), key=lambda x: x[1]["order"])
+        for skill_id, skill_data in sorted_skills:
+            skill = SKILLS.get(skill_id, {})
+            level = skill_data["level"]
+            order = skill_data["order"]
+            text += f"{order+1}. {skill.get('name', skill_id)} Lv.{level}\n"
+        text += "\n"
+    
+    # Показываем доступные скиллы
+    text += "<b>Доступные скиллы:</b>\n"
+    btns = []
+    for skill_id, skill in SKILLS.items():
+        user_skill = user_skills.get(skill_id, {})
+        level = user_skill.get("level", 0)
+        max_level = skill.get("max_level", 10)
+        cost = skill.get("cost_per_level", 100) * (level + 1)
+        
+        if level == 0:
+            text += f"{skill['name']} — {skill['desc']}\n💰 Прокачка: {cost}💰\n\n"
+            btns.append([IKB(text=f"➕ {skill['name']} ({cost}💰)", callback_data=f"skill_up_{skill_id}")])
+        elif level < max_level:
+            text += f"{skill['name']} Lv.{level}/{max_level} — {skill['desc']}\n💰 Прокачка: {cost}💰\n\n"
+            btns.append([IKB(text=f"⬆️ {skill['name']} Lv.{level}→{level+1} ({cost}💰)", callback_data=f"skill_up_{skill_id}")])
+        else:
+            text += f"{skill['name']} Lv.{level} (МАКС) — {skill['desc']}\n\n"
+    
+    if user_skills and len(user_skills) > 1:
+        btns.append([IKB(text="🔄 Изменить порядок", callback_data="skill_reorder")])
+    btns.append([IKB(text="🏠 Меню", callback_data="menu")])
+    
+    try: await cb.message.edit_text(text, reply_markup=IKM(inline_keyboard=btns))
+    except: await cb.message.answer(text, reply_markup=IKM(inline_keyboard=btns))
+
+@dp.callback_query(F.data.startswith("skill_up_"))
+async def cb_skill_up(cb: types.CallbackQuery):
+    skill_id = cb.data[9:]
+    if skill_id not in SKILLS:
+        try: await cb.answer("Ошибка!", show_alert=True)
+        except: pass
+        return
+    
+    skill = SKILLS[skill_id]
+    user_skills = await db.get_skills(cb.from_user.id)
+    level = user_skills.get(skill_id, {}).get("level", 0)
+    max_level = skill.get("max_level", 10)
+    
+    if level >= max_level:
+        try: await cb.answer("Скилл уже максимального уровня!", show_alert=True)
+        except: pass
+        return
+    
+    cost = skill.get("cost_per_level", 100) * (level + 1)
+    p = await db.get_player(cb.from_user.id)
+    if p["gold"] < cost:
+        try: await cb.answer(f"Недостаточно золота! Нужно {cost}💰", show_alert=True)
+        except: pass
+        return
+    
+    await db.spend_gold(cb.from_user.id, cost)
+    await db.upgrade_skill(cb.from_user.id, skill_id)
+    
+    try: await cb.answer(f"✅ {skill['name']} прокачан до Lv.{level+1}!", show_alert=True)
+    except: pass
+    await cb_skills(cb)
+
+@dp.callback_query(F.data == "skill_reorder")
+async def cb_skill_reorder(cb: types.CallbackQuery):
+    try: await cb.answer()
+    except: pass
+    user_skills = await db.get_skills(cb.from_user.id)
+    if len(user_skills) < 2:
+        try: await cb.answer("Нужно минимум 2 скилла для изменения порядка!", show_alert=True)
+        except: pass
+        return
+    
+    text = "🔄 <b>Изменить порядок скиллов</b>\n\n<i>Нажми на скилл, чтобы переместить его в начало очереди.</i>\n\n"
+    sorted_skills = sorted(user_skills.items(), key=lambda x: x[1]["order"])
+    btns = []
+    for skill_id, skill_data in sorted_skills:
+        skill = SKILLS.get(skill_id, {})
+        order = skill_data["order"]
+        text += f"{order+1}. {skill.get('name', skill_id)} Lv.{skill_data['level']}\n"
+        btns.append([IKB(text=f"⬆️ {skill.get('name', skill_id)} → В начало", callback_data=f"skill_move_{skill_id}")])
+    
+    btns.append([IKB(text="🏠 Меню", callback_data="menu")])
+    
+    try: await cb.message.edit_text(text, reply_markup=IKM(inline_keyboard=btns))
+    except: await cb.message.answer(text, reply_markup=IKM(inline_keyboard=btns))
+
+@dp.callback_query(F.data.startswith("skill_move_"))
+async def cb_skill_move(cb: types.CallbackQuery):
+    skill_id = cb.data[11:]
+    user_skills = await db.get_skills(cb.from_user.id)
+    if skill_id not in user_skills:
+        try: await cb.answer("Ошибка!", show_alert=True)
+        except: pass
+        return
+    
+    # Перемещаем скилл в начало (order = 0), остальные сдвигаем
+    current_order = user_skills[skill_id]["order"]
+    new_orders = {}
+    for sid, sdata in user_skills.items():
+        if sid == skill_id:
+            new_orders[sid] = 0
+        elif sdata["order"] < current_order:
+            new_orders[sid] = sdata["order"] + 1
+        else:
+            new_orders[sid] = sdata["order"]
+    
+    await db.reorder_skills(cb.from_user.id, new_orders)
+    
+    try: await cb.answer("✅ Порядок изменён!", show_alert=True)
+    except: pass
+    await cb_skill_reorder(cb)
 
 # ======== ПРОФЕССИИ ========
 @dp.callback_query(F.data == "profession")
@@ -1230,9 +1426,11 @@ async def cb_buy_potion(cb: types.CallbackQuery):
         mult = pot.get("multiplier", 1.0)
         bonus = pot.get("drop_chance_bonus", 0)
         await db.add_effect(cb.from_user.id, pot["type"], mult, bonus, duration)
-        await cb.answer(f"✅ {pot['name']} активировано на {duration} минут!", show_alert=True)
+        try: await cb.answer(f"✅ {pot['name']} активировано на {duration} минут!", show_alert=True)
+        except: pass
     else:
-        await cb.answer(f"✅ {pot['name']} куплено!", show_alert=True)
+        try: await cb.answer(f"✅ {pot['name']} куплено!", show_alert=True)
+        except: pass
     
     await cb_shop(cb)
 

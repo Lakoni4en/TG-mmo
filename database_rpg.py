@@ -14,6 +14,7 @@ async def init_db():
             class TEXT DEFAULT '', race TEXT DEFAULT '', level INTEGER DEFAULT 1, xp INTEGER DEFAULT 0,
             gold INTEGER DEFAULT 500, crystals INTEGER DEFAULT 0,
             energy INTEGER DEFAULT 100, max_energy INTEGER DEFAULT 100, energy_updated_at TEXT DEFAULT '',
+            current_hp INTEGER DEFAULT 0, max_hp INTEGER DEFAULT 0,
             arena_rating INTEGER DEFAULT 1000, arena_wins INTEGER DEFAULT 0, arena_losses INTEGER DEFAULT 0,
             arena_fights_today INTEGER DEFAULT 0, arena_last_reset TEXT DEFAULT '',
             total_hunts INTEGER DEFAULT 0, total_kills INTEGER DEFAULT 0,
@@ -63,6 +64,11 @@ async def init_db():
             quantity INTEGER DEFAULT 0,
             PRIMARY KEY (user_id, potion_type)
         )""")
+        await db.execute("""CREATE TABLE IF NOT EXISTS skills (
+            user_id INTEGER, skill_id TEXT, level INTEGER DEFAULT 1,
+            skill_order INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, skill_id)
+        )""")
         await db.execute("""CREATE TABLE IF NOT EXISTS active_effects (
             user_id INTEGER,
             effect_type TEXT,
@@ -105,6 +111,35 @@ async def update_character_image(user_id: int, image_url: str):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("UPDATE players SET character_image_url=? WHERE user_id=?", (image_url, user_id))
         await db.commit()
+
+async def set_player_hp(user_id: int, current_hp: int, max_hp: int = None):
+    """Устанавливает HP игрока"""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        if max_hp is not None:
+            await db.execute("UPDATE players SET current_hp=?, max_hp=? WHERE user_id=?", (current_hp, max_hp, user_id))
+        else:
+            await db.execute("UPDATE players SET current_hp=? WHERE user_id=?", (current_hp, user_id))
+        await db.commit()
+
+async def restore_hp(user_id: int, amount: int) -> int:
+    """Восстанавливает HP игрока, возвращает новое значение HP"""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute("SELECT current_hp, max_hp FROM players WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        if not row: return 0
+        current_hp, max_hp = row[0] or 0, row[1] or 0
+        new_hp = min(max_hp, current_hp + amount)
+        await db.execute("UPDATE players SET current_hp=? WHERE user_id=?", (new_hp, user_id))
+        await db.commit()
+        return new_hp
+
+async def get_current_hp(user_id: int) -> tuple[int, int]:
+    """Возвращает (current_hp, max_hp) игрока"""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute("SELECT current_hp, max_hp FROM players WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        if not row: return (0, 0)
+        return (row[0] or 0, row[1] or 0)
 
 async def update_player_name(user_id: int, username: str, first_name: str):
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -660,4 +695,43 @@ async def get_active_effects(user_id: int) -> dict:
 async def cleanup_expired_effects():
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("DELETE FROM active_effects WHERE expires_at < ?", (datetime.now().isoformat(),))
+        await db.commit()
+
+# ======== СКИЛЛЫ ========
+async def get_skills(user_id: int) -> dict:
+    """Возвращает все скиллы игрока с уровнями и порядком"""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT skill_id, level, skill_order FROM skills WHERE user_id=? ORDER BY skill_order", (user_id,))
+        rows = await cur.fetchall()
+        return {r[0]: {"level": r[1], "order": r[2]} for r in rows}
+
+async def upgrade_skill(user_id: int, skill_id: str) -> bool:
+    """Прокачивает скилл (добавляет если нет)"""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute("SELECT level FROM skills WHERE user_id=? AND skill_id=?", (user_id, skill_id))
+        row = await cur.fetchone()
+        if row:
+            await db.execute("UPDATE skills SET level=level+1 WHERE user_id=? AND skill_id=?", (user_id, skill_id))
+        else:
+            # Получаем максимальный порядок
+            cur = await db.execute("SELECT MAX(skill_order) FROM skills WHERE user_id=?", (user_id,))
+            row = await cur.fetchone()
+            max_order = (row[0] or -1) + 1
+            await db.execute("INSERT INTO skills (user_id, skill_id, level, skill_order) VALUES (?, ?, 1, ?)",
+                (user_id, skill_id, max_order))
+        await db.commit()
+        return True
+
+async def set_skill_order(user_id: int, skill_id: str, new_order: int):
+    """Устанавливает порядок использования скилла"""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE skills SET skill_order=? WHERE user_id=? AND skill_id=?", (new_order, user_id, skill_id))
+        await db.commit()
+
+async def reorder_skills(user_id: int, skill_orders: dict):
+    """Обновляет порядок всех скиллов (skill_id -> order)"""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        for skill_id, order in skill_orders.items():
+            await db.execute("UPDATE skills SET skill_order=? WHERE user_id=? AND skill_id=?", (order, user_id, skill_id))
         await db.commit()
