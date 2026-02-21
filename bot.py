@@ -68,7 +68,7 @@ async def add_item_with_image(user_id: int, item: dict) -> int:
             img_url = await generate_item_image(item["name"], item["item_type"], item["rarity"])
             if img_url:
                 item["image_url"] = img_url
-    except Exception as e:
+        except Exception as e:
             logger.error(f"Ошибка генерации изображения предмета: {e}")
     item_id = await db.add_item(user_id, item)
     if item.get("image_url") and item_id:
