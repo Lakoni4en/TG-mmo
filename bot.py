@@ -70,10 +70,14 @@ async def add_item_with_image(user_id: int, item: dict) -> int:
                 item["image_url"] = img_url
         except Exception as e:
             logger.error(f"Ошибка генерации изображения предмета: {e}")
-    item_id = await db.add_item(user_id, item)
-    if item.get("image_url") and item_id:
-        await db.update_item_image(item_id, item["image_url"])
-    return item_id if item_id else 0
+    try:
+        item_id = await db.add_item(user_id, item)
+        if item.get("image_url") and item_id:
+            await db.update_item_image(item_id, item["image_url"])
+        return item_id if item_id else 0
+    except Exception as e:
+        logger.error(f"Ошибка добавления предмета: {e}")
+        return 0
 
 # ======== /START ========
 @dp.message(CommandStart())
@@ -183,7 +187,7 @@ async def cb_cls(cb: types.CallbackQuery):
             img_url = await generate_character_image(c["name"], r["name"])
             if img_url:
                 await db.update_character_image(cb.from_user.id, img_url)
-    except Exception as e:
+        except Exception as e:
             logger.error(f"Ошибка генерации изображения персонажа: {e}")
     
     text = f"🎉 <b>{r['name']} {c['name']} создан!</b>\n\n❤️{s['max_hp']} ⚔️{s['attack']} 🛡{s['defense']} 💥{s['crit']}%\n💰500 золота ⚡100 энергии\n\nУдачи! ⚔️"
@@ -639,10 +643,11 @@ async def cb_itm(cb: types.CallbackQuery):
                     try:
                         await cb.message.answer_photo(img_url, caption=text, reply_markup=IKM(inline_keyboard=btns))
                         await cb.message.delete()
+                        return
                     except:
                         try: await cb.message.edit_text(text, reply_markup=IKM(inline_keyboard=btns))
                         except: pass
-        return
+                        return
             except Exception as e:
                 logger.error(f"Ошибка генерации изображения: {e}")
         try: await cb.message.edit_text(text, reply_markup=IKM(inline_keyboard=btns))
