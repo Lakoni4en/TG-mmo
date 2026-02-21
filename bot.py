@@ -216,9 +216,10 @@ async def cb_cls(cb: types.CallbackQuery):
     if cid not in CLASSES: await cb.answer("Ошибка!",show_alert=True); return
     player = await db.get_player(cb.from_user.id)
     if not player or not player.get("race"): await cb.answer("Сначала выбери расу!",show_alert=True); return
-    if player.get("class"): await cb.answer("Уже есть персонаж!",show_alert=True); return
+    if player.get("class") and player.get("class") in CLASSES: await cb.answer("Уже есть персонаж!",show_alert=True); return
     await cb.answer()
-    await db.create_player(cb.from_user.id, cb.from_user.username or "", cb.from_user.first_name or "", cid, player.get("race"))
+    # Обновляем класс игрока
+    await db.update_player_class(cb.from_user.id, cid)
     s = get_class_stats(cid, 1, player.get("race")); c = CLASSES[cid]; r = RACES[player.get("race")]
     
     # Генерируем изображение персонажа
@@ -262,7 +263,7 @@ async def cb_menu(cb: types.CallbackQuery):
         try: await cb.message.edit_text(t, reply_markup=IKM(inline_keyboard=[[IKB(text="🧬 Выбрать расу", callback_data="race_select")]]))
         except: await cb.message.answer(t, reply_markup=IKM(inline_keyboard=[[IKB(text="🧬 Выбрать расу", callback_data="race_select")]]))
         return
-    if not player.get("class"):
+    if not player.get("class") or player.get("class") not in CLASSES:
         # Раса выбрана, но класс нет - показываем выбор класса
         t = "⚔️ <b>Раса выбрана!</b>\n\n<i>Теперь выбери класс:</i>\n\n"
         for cid, c in CLASSES.items():
@@ -284,7 +285,7 @@ async def cb_menu(cb: types.CallbackQuery):
 async def cb_hunt(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     zones = get_available_zones(p["level"])
@@ -383,7 +384,7 @@ async def cb_hz(cb: types.CallbackQuery):
 async def cb_arena(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     fl = await db.get_arena_fights_left(cb.from_user.id)
@@ -424,7 +425,7 @@ async def cb_afight(cb: types.CallbackQuery):
 async def cb_tower(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     att = await db.get_tower_attempts(cb.from_user.id)
@@ -471,7 +472,7 @@ async def cb_tw_go(cb: types.CallbackQuery):
 async def cb_quests(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     uid = cb.from_user.id
@@ -507,7 +508,7 @@ async def cb_qclaim(cb: types.CallbackQuery):
 async def cb_exped(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     uid = cb.from_user.id
@@ -569,7 +570,7 @@ async def cb_exp_collect(cb: types.CallbackQuery):
 async def cb_wheel(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     can = await db.can_spin_wheel(cb.from_user.id)
@@ -609,7 +610,7 @@ async def cb_wspin(cb: types.CallbackQuery):
 async def cb_gacha(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     try: await cb.message.edit_text(f"🎰 <b>Призыв</b>\n💰{p['gold']} 💎{p['crystals']}\n\n🪙 Обычный — {GACHA_FREE_COST}💰\n  ⚪50% 🟢30% 🔵15% 🟣4% 🟡1%\n\n💎 Премиум — {GACHA_PREM_COST}💎\n  🟢30% 🔵40% 🟣25% 🟡5%\n\n💎 10x — {GACHA_10X_COST}💎 (гарантия 🟣+)", reply_markup=IKM(inline_keyboard=[
@@ -649,7 +650,7 @@ async def cb_g10x(cb: types.CallbackQuery):
 async def cb_inv(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     await show_inv(cb.from_user.id, cb.message)
@@ -779,7 +780,7 @@ async def cb_sel(cb: types.CallbackQuery):
 async def cb_upgrade(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     uid = cb.from_user.id
@@ -823,7 +824,7 @@ async def cb_upgr(cb: types.CallbackQuery):
 async def cb_auc(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     cnt = await db.get_auction_count()
@@ -913,7 +914,7 @@ async def cb_alst(cb: types.CallbackQuery):
 async def cb_potions(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     uid = cb.from_user.id
@@ -986,7 +987,7 @@ async def cb_use_potion(cb: types.CallbackQuery):
 async def cb_profession(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     
@@ -1032,7 +1033,7 @@ async def cb_set_profession(cb: types.CallbackQuery):
 async def cb_upgrade_item(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     uid = cb.from_user.id
@@ -1113,7 +1114,7 @@ async def cb_upgrade_item_do(cb: types.CallbackQuery):
 async def cb_prof(cb: types.CallbackQuery):
     await cb.answer(); uid = cb.from_user.id
     p = await db.get_player(uid)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     cls = CLASSES[p["class"]]; race = RACES.get(p.get("race", ""), {})
@@ -1168,7 +1169,7 @@ async def cb_prof(cb: types.CallbackQuery):
 async def cb_top(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p.get("class"):
+    if not p or not p.get("class") or p.get("class") not in CLASSES:
         await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
         return
     leaders = await db.get_leaderboard_xp(10); rank = await db.get_player_rank(cb.from_user.id)

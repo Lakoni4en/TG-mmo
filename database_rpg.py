@@ -96,6 +96,11 @@ async def update_player_race(user_id: int, race_id: str):
         await db.execute("UPDATE players SET race=? WHERE user_id=?", (race_id, user_id))
         await db.commit()
 
+async def update_player_class(user_id: int, class_id: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE players SET class=? WHERE user_id=?", (class_id, user_id))
+        await db.commit()
+
 async def update_character_image(user_id: int, image_url: str):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("UPDATE players SET character_image_url=? WHERE user_id=?", (image_url, user_id))
