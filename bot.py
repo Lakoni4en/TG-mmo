@@ -730,7 +730,7 @@ async def cb_itm(cb: types.CallbackQuery):
                     try:
                         await cb.message.answer_photo(img_url, caption=text, reply_markup=IKM(inline_keyboard=btns))
                         await cb.message.delete()
-        return
+                        return
                     except:
                         try: await cb.message.edit_text(text, reply_markup=IKM(inline_keyboard=btns))
                         except: pass
