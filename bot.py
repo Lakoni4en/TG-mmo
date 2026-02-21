@@ -102,24 +102,29 @@ async def cmd_start(msg: types.Message):
             prem_text = f" (+{PREMIUM_BONUSES['daily_gold_bonus']}💰 +{PREMIUM_BONUSES['crystals_per_day']}💎 от премиума)" if is_prem else ""
             dt = f"\n🌅 <b>Ежедневный бонус!</b> +{bg}💰 +{bc}💎 (📅{ds} дней){prof_text}{prem_text}\n"
         player = await db.get_player(msg.from_user.id)
-        e = db.calculate_energy(player)
         cls = CLASSES[player["class"]]
         premium_text = ""
         if await db.is_premium_active(msg.from_user.id):
             premium_text = " 👑 ПРЕМИУМ"
         await msg.answer(f"{cls['name']} <b>{msg.from_user.first_name}</b>{premium_text} (Lv.{player['level']})\n💰{player['gold']} 💎{player['crystals']}{dt}\nВыбери действие:", reply_markup=kb_main())
     else:
-        t = "⚔️ <b>Добро пожаловать в мир приключений!</b>\n\n<i>Сначала выбери расу, затем класс:</i>\n\n"
-        t += "<b>Расы:</b>\n"
-        for rid, r in RACES.items():
-            t += f"{r['name']} — {r['desc']}\n"
-        t += "\n<b>Классы:</b>\n"
-        for cid, c in CLASSES.items():
-            t += f"{c['name']} — {c['desc']}\n"
-        await msg.answer(t, reply_markup=IKM(inline_keyboard=[
-            [IKB(text="1️⃣ Выбрать расу", callback_data="race_select")],
-            [IKB(text="2️⃣ Выбрать класс", callback_data="class_select")],
-        ]))
+        player = await db.get_player(msg.from_user.id)
+        if player and player.get("race") and not player.get("class"):
+            # Раса выбрана, но класс нет - показываем выбор класса
+            t = "⚔️ <b>Раса выбрана!</b>\n\n<i>Теперь выбери класс:</i>\n\n"
+            for cid, c in CLASSES.items():
+                t += f"{c['name']} — {c['desc']}\n"
+            await msg.answer(t, reply_markup=IKM(inline_keyboard=[
+                [IKB(text="⚔️ Выбрать класс", callback_data="class_select")],
+            ]))
+        else:
+            # Нет расы - показываем выбор расы
+            t = "⚔️ <b>Добро пожаловать в мир приключений!</b>\n\n<i>Сначала выбери расу:</i>\n\n"
+            for rid, r in RACES.items():
+                t += f"{r['name']} — {r['desc']}\n"
+            await msg.answer(t, reply_markup=IKM(inline_keyboard=[
+                [IKB(text="🧬 Выбрать расу", callback_data="race_select")],
+            ]))
 
 @dp.callback_query(F.data == "race_select")
 async def cb_race_select(cb: types.CallbackQuery):
@@ -187,7 +192,7 @@ async def cb_cls(cb: types.CallbackQuery):
             img_url = await generate_character_image(c["name"], r["name"])
             if img_url:
                 await db.update_character_image(cb.from_user.id, img_url)
-        except Exception as e:
+    except Exception as e:
             logger.error(f"Ошибка генерации изображения персонажа: {e}")
     
     text = f"🎉 <b>{r['name']} {c['name']} создан!</b>\n\n❤️{s['max_hp']} ⚔️{s['attack']} 🛡{s['defense']} 💥{s['crit']}%\n💰500 золота ⚡100 энергии\n\nУдачи! ⚔️"
@@ -205,10 +210,31 @@ async def cb_cls(cb: types.CallbackQuery):
 async def cb_menu(cb: types.CallbackQuery):
     await cb.answer()
     player = await db.get_player(cb.from_user.id)
-    if not player or not player["class"]:
-        try: await cb.message.edit_text("Нажми /start!")
-        except: pass
+    if not player:
+        # Нет игрока - показываем выбор расы
+        t = "⚔️ <b>Добро пожаловать в мир приключений!</b>\n\n<i>Сначала выбери расу:</i>\n\n"
+        for rid, r in RACES.items():
+            t += f"{r['name']} — {r['desc']}\n"
+        try: await cb.message.edit_text(t, reply_markup=IKM(inline_keyboard=[[IKB(text="🧬 Выбрать расу", callback_data="race_select")]]))
+        except: await cb.message.answer(t, reply_markup=IKM(inline_keyboard=[[IKB(text="🧬 Выбрать расу", callback_data="race_select")]]))
         return
+    if not player.get("race"):
+        # Нет расы - показываем выбор расы
+        t = "⚔️ <b>Добро пожаловать в мир приключений!</b>\n\n<i>Сначала выбери расу:</i>\n\n"
+        for rid, r in RACES.items():
+            t += f"{r['name']} — {r['desc']}\n"
+        try: await cb.message.edit_text(t, reply_markup=IKM(inline_keyboard=[[IKB(text="🧬 Выбрать расу", callback_data="race_select")]]))
+        except: await cb.message.answer(t, reply_markup=IKM(inline_keyboard=[[IKB(text="🧬 Выбрать расу", callback_data="race_select")]]))
+        return
+    if not player.get("class"):
+        # Раса выбрана, но класс нет - показываем выбор класса
+        t = "⚔️ <b>Раса выбрана!</b>\n\n<i>Теперь выбери класс:</i>\n\n"
+        for cid, c in CLASSES.items():
+            t += f"{c['name']} — {c['desc']}\n"
+        try: await cb.message.edit_text(t, reply_markup=IKM(inline_keyboard=[[IKB(text="⚔️ Выбрать класс", callback_data="class_select")]]))
+        except: await cb.message.answer(t, reply_markup=IKM(inline_keyboard=[[IKB(text="⚔️ Выбрать класс", callback_data="class_select")]]))
+        return
+    # Всё выбрано - показываем главное меню
     cls = CLASSES[player["class"]]
     premium_text = ""
     if await db.is_premium_active(cb.from_user.id):
@@ -222,7 +248,9 @@ async def cb_menu(cb: types.CallbackQuery):
 async def cb_hunt(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p["class"]: return
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     zones = get_available_zones(p["level"])
     btns = [[IKB(text=f"{z['name']} (Lv.{z['min_level']}+)", callback_data=f"hz_{z['id']}")] for z in zones]
     btns.append([IKB(text="🏠 Меню", callback_data="menu")])
@@ -319,7 +347,9 @@ async def cb_hz(cb: types.CallbackQuery):
 async def cb_arena(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p["class"]: return
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     fl = await db.get_arena_fights_left(cb.from_user.id)
     btns = []
     if fl > 0: btns.append([IKB(text="⚔️ Сразиться!", callback_data="afight")])
@@ -358,7 +388,9 @@ async def cb_afight(cb: types.CallbackQuery):
 async def cb_tower(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p["class"]: return
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     att = await db.get_tower_attempts(cb.from_user.id)
     nf = p["tower_floor"] + 1
     m = get_tower_monster(nf)
@@ -402,6 +434,10 @@ async def cb_tw_go(cb: types.CallbackQuery):
 @dp.callback_query(F.data == "quests")
 async def cb_quests(cb: types.CallbackQuery):
     await cb.answer()
+    p = await db.get_player(cb.from_user.id)
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     uid = cb.from_user.id
     quests = await db.get_daily_quests(uid)
     if not quests:
@@ -434,6 +470,10 @@ async def cb_qclaim(cb: types.CallbackQuery):
 @dp.callback_query(F.data == "exped")
 async def cb_exped(cb: types.CallbackQuery):
     await cb.answer()
+    p = await db.get_player(cb.from_user.id)
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     uid = cb.from_user.id
     active = await db.get_active_expedition(uid)
     if active:
@@ -492,6 +532,10 @@ async def cb_exp_collect(cb: types.CallbackQuery):
 @dp.callback_query(F.data == "wheel")
 async def cb_wheel(cb: types.CallbackQuery):
     await cb.answer()
+    p = await db.get_player(cb.from_user.id)
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     can = await db.can_spin_wheel(cb.from_user.id)
     btns = []
     if can: btns.append([IKB(text="🎡 Крутить!", callback_data="wspin")])
@@ -529,7 +573,9 @@ async def cb_wspin(cb: types.CallbackQuery):
 async def cb_gacha(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p: return
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     try: await cb.message.edit_text(f"🎰 <b>Призыв</b>\n💰{p['gold']} 💎{p['crystals']}\n\n🪙 Обычный — {GACHA_FREE_COST}💰\n  ⚪50% 🟢30% 🔵15% 🟣4% 🟡1%\n\n💎 Премиум — {GACHA_PREM_COST}💎\n  🟢30% 🔵40% 🟣25% 🟡5%\n\n💎 10x — {GACHA_10X_COST}💎 (гарантия 🟣+)", reply_markup=IKM(inline_keyboard=[
         [IKB(text=f"🪙 Обычный ({GACHA_FREE_COST}💰)",callback_data="gfree")],
         [IKB(text=f"💎 Премиум ({GACHA_PREM_COST}💎)",callback_data="gprem")],
@@ -565,7 +611,12 @@ async def cb_g10x(cb: types.CallbackQuery):
 # ======== ИНВЕНТАРЬ ========
 @dp.callback_query(F.data == "inv")
 async def cb_inv(cb: types.CallbackQuery):
-    await cb.answer(); await show_inv(cb.from_user.id, cb.message)
+    await cb.answer()
+    p = await db.get_player(cb.from_user.id)
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
+    await show_inv(cb.from_user.id, cb.message)
 
 @dp.callback_query(F.data.startswith("invp_"))
 async def cb_invp(cb: types.CallbackQuery):
@@ -643,7 +694,7 @@ async def cb_itm(cb: types.CallbackQuery):
                     try:
                         await cb.message.answer_photo(img_url, caption=text, reply_markup=IKM(inline_keyboard=btns))
                         await cb.message.delete()
-                        return
+        return
                     except:
                         try: await cb.message.edit_text(text, reply_markup=IKM(inline_keyboard=btns))
                         except: pass
@@ -691,6 +742,10 @@ async def cb_sel(cb: types.CallbackQuery):
 @dp.callback_query(F.data == "upgrade")
 async def cb_upgrade(cb: types.CallbackQuery):
     await cb.answer()
+    p = await db.get_player(cb.from_user.id)
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     uid = cb.from_user.id
     inv = await db.get_inventory(uid)
     bag = [i for i in inv if not i["is_equipped"]]
@@ -731,6 +786,10 @@ async def cb_upgr(cb: types.CallbackQuery):
 @dp.callback_query(F.data == "auc")
 async def cb_auc(cb: types.CallbackQuery):
     await cb.answer()
+    p = await db.get_player(cb.from_user.id)
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     cnt = await db.get_auction_count()
     try: await cb.message.edit_text(f"🎪 <b>Аукцион</b>\n\n📋 Лотов: {cnt}\n💰 Комиссия: 10%\n\nПокупай экипировку у других игроков!", reply_markup=IKM(inline_keyboard=[
         [IKB(text="🔍 Смотреть лоты",callback_data="auc_b")],
@@ -817,6 +876,10 @@ async def cb_alst(cb: types.CallbackQuery):
 @dp.callback_query(F.data == "potions")
 async def cb_potions(cb: types.CallbackQuery):
     await cb.answer()
+    p = await db.get_player(cb.from_user.id)
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     uid = cb.from_user.id
     potions = await db.get_potions(uid)
     effects = await db.get_active_effects(uid)
@@ -887,7 +950,9 @@ async def cb_use_potion(cb: types.CallbackQuery):
 async def cb_profession(cb: types.CallbackQuery):
     await cb.answer()
     p = await db.get_player(cb.from_user.id)
-    if not p or not p["class"]: return
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     
     if not p.get("profession"):
         # Выбор профессии
@@ -930,6 +995,10 @@ async def cb_set_profession(cb: types.CallbackQuery):
 @dp.callback_query(F.data == "upgrade_item")
 async def cb_upgrade_item(cb: types.CallbackQuery):
     await cb.answer()
+    p = await db.get_player(cb.from_user.id)
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     uid = cb.from_user.id
     inv = await db.get_inventory(uid)
     equipped = [i for i in inv if i["is_equipped"]]
@@ -1008,7 +1077,9 @@ async def cb_upgrade_item_do(cb: types.CallbackQuery):
 async def cb_prof(cb: types.CallbackQuery):
     await cb.answer(); uid = cb.from_user.id
     p = await db.get_player(uid)
-    if not p or not p["class"]: return
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
     cls = CLASSES[p["class"]]; race = RACES.get(p.get("race", ""), {})
     base = get_class_stats(p["class"], p["level"], p.get("race"))
     eq = await db.get_equipment_bonuses(uid); tot = get_total_stats(base, eq)
@@ -1059,7 +1130,12 @@ async def cb_prof(cb: types.CallbackQuery):
 # ======== ТОП ========
 @dp.callback_query(F.data == "top")
 async def cb_top(cb: types.CallbackQuery):
-    await cb.answer(); leaders = await db.get_leaderboard_xp(10); rank = await db.get_player_rank(cb.from_user.id)
+    await cb.answer()
+    p = await db.get_player(cb.from_user.id)
+    if not p or not p.get("class"):
+        await cb.answer("Сначала выбери расу и класс! Нажми /start", show_alert=True)
+        return
+    leaders = await db.get_leaderboard_xp(10); rank = await db.get_player_rank(cb.from_user.id)
     medals = ["🥇","🥈","🥉"]; lines = []
     for i,p in enumerate(leaders):
         m = medals[i] if i<3 else f"#{i+1}"; ce = CLASSES.get(p["class"],{}).get("name","?").split()[0]; n = p["first_name"] or "???"
@@ -1118,7 +1194,7 @@ async def cb_buy_potion(cb: types.CallbackQuery):
         bonus = pot.get("drop_chance_bonus", 0)
         await db.add_effect(cb.from_user.id, pot["type"], mult, bonus, duration)
         await cb.answer(f"✅ {pot['name']} активировано на {duration} минут!", show_alert=True)
-    else:
+        else:
         await cb.answer(f"✅ {pot['name']} куплено!", show_alert=True)
     
     await cb_shop(cb)
