@@ -50,6 +50,9 @@ def kb_main():
 def kb_back():
     return IKM(inline_keyboard=[[IKB(text="🏠 Меню", callback_data="menu")]])
 
+def kb_start():
+    return IKM(inline_keyboard=[[IKB(text="🎮 Начать игру", callback_data="start_game")]])
+
 async def get_combat_stats(user_id):
     player = await db.get_player(user_id)
     if not player: return {}
@@ -125,6 +128,39 @@ async def cmd_start(msg: types.Message):
             await msg.answer(t, reply_markup=IKM(inline_keyboard=[
                 [IKB(text="🧬 Выбрать расу", callback_data="race_select")],
             ]))
+    
+    # Обработчик кнопки "Начать игру"
+@dp.callback_query(F.data == "start_game")
+async def cb_start_game(cb: types.CallbackQuery):
+    await cb.answer()
+    # Показываем выбор расы
+    player = await db.get_player(cb.from_user.id)
+    if player and player.get("race"):
+        # Раса уже выбрана - показываем выбор класса
+        if player.get("class"):
+            # Всё выбрано - показываем меню
+            await cb_menu(cb)
+        else:
+            # Показываем выбор класса
+            t = "⚔️ <b>Раса выбрана!</b>\n\n<i>Теперь выбери класс:</i>\n\n"
+            for cid, c in CLASSES.items():
+                t += f"{c['name']} — {c['desc']}\n"
+            try: await cb.message.edit_text(t, reply_markup=IKM(inline_keyboard=[[IKB(text="⚔️ Выбрать класс", callback_data="class_select")]]))
+            except: await cb.message.answer(t, reply_markup=IKM(inline_keyboard=[[IKB(text="⚔️ Выбрать класс", callback_data="class_select")]]))
+    else:
+        # Показываем выбор расы
+        t = "🧬 <b>Выбери расу:</b>\n\n"
+        btns = []
+        for rid, r in RACES.items():
+            t += f"{r['name']}\n<i>{r['desc']}</i>\n"
+            if r.get("bonus_hp"): t += f"❤️{r['bonus_hp']:+d} "
+            if r.get("bonus_attack"): t += f"⚔️{r['bonus_attack']:+d} "
+            if r.get("bonus_defense"): t += f"🛡{r['bonus_defense']:+d} "
+            if r.get("bonus_crit"): t += f"💥{r['bonus_crit']:+.1f}%"
+            t += "\n\n"
+            btns.append([IKB(text=r['name'], callback_data=f"race_{rid}")])
+        try: await cb.message.edit_text(t, reply_markup=IKM(inline_keyboard=btns))
+        except: await cb.message.answer(t, reply_markup=IKM(inline_keyboard=btns))
 
 @dp.callback_query(F.data == "race_select")
 async def cb_race_select(cb: types.CallbackQuery):
@@ -192,7 +228,7 @@ async def cb_cls(cb: types.CallbackQuery):
             img_url = await generate_character_image(c["name"], r["name"])
             if img_url:
                 await db.update_character_image(cb.from_user.id, img_url)
-    except Exception as e:
+        except Exception as e:
             logger.error(f"Ошибка генерации изображения персонажа: {e}")
     
     text = f"🎉 <b>{r['name']} {c['name']} создан!</b>\n\n❤️{s['max_hp']} ⚔️{s['attack']} 🛡{s['defense']} 💥{s['crit']}%\n💰500 золота ⚡100 энергии\n\nУдачи! ⚔️"
@@ -1294,7 +1330,10 @@ async def cmd_help(msg: types.Message):
 @dp.message(Command("profile"))
 async def cmd_prof(msg: types.Message): 
     p = await db.get_player(msg.from_user.id)
-    if not p or not p["class"]: await msg.answer("Нажми /start!"); return
+    if not p or not p.get("class"):
+        t = "⚔️ <b>Сначала создай персонажа!</b>\n\n<i>Нажми кнопку ниже, чтобы начать:</i>"
+        await msg.answer(t, reply_markup=kb_start())
+        return
     # Redirect to callback handler
     await msg.answer("👤 Используй кнопку Профиль в меню!", reply_markup=kb_main())
 
@@ -1321,15 +1360,17 @@ async def handle_txt(msg: types.Message):
     # Секретный код
     if text.upper() == "PREMAK+":
         if not p or not p.get("class"): 
-            await msg.answer("Сначала создай персонажа! /start")
+            t = "⚔️ <b>Сначала создай персонажа!</b>\n\n<i>Нажми кнопку ниже, чтобы начать:</i>"
+            await msg.answer(t, reply_markup=kb_start())
             return
         await db.activate_premium(msg.from_user.id, 7)
         await msg.answer("🎉 <b>Секретный код активирован!</b>\n\n👑 Премиум на 7 дней активирован!\n\n✨ +50% XP\n💰 +50% золота\n🎁 +15% к дропу\n💎 +10 кристаллов в день", reply_markup=kb_main())
         return
     
     if not p or not p.get("class"): 
-        await msg.answer("👋 /start чтобы начать!")
-    else: 
+        t = "⚔️ <b>Добро пожаловать в мир приключений!</b>\n\n<i>Нажми кнопку ниже, чтобы начать игру:</i>"
+        await msg.answer(t, reply_markup=kb_start())
+    else:
         await msg.answer("⚔️ Используй кнопки!", reply_markup=kb_main())
 
 # ======== ЗАПУСК ========
