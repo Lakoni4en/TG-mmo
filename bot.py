@@ -614,7 +614,7 @@ async def cb_itm(cb: types.CallbackQuery):
         # Аукцион
         ap = final_sell * 3
         btns.append([IKB(text=f"🎪 На аукцион ({ap}💰)", callback_data=f"alst_{iid}")])
-            else:
+    else:
         if lvl < MAX_ITEM_LEVEL:
             p = await db.get_player(cb.from_user.id)
             prof_bonus = get_profession_bonus(p.get("profession", ""))
