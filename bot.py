@@ -1118,7 +1118,7 @@ async def cb_buy_potion(cb: types.CallbackQuery):
         bonus = pot.get("drop_chance_bonus", 0)
         await db.add_effect(cb.from_user.id, pot["type"], mult, bonus, duration)
         await cb.answer(f"✅ {pot['name']} активировано на {duration} минут!", show_alert=True)
-        else:
+    else:
         await cb.answer(f"✅ {pot['name']} куплено!", show_alert=True)
     
     await cb_shop(cb)
